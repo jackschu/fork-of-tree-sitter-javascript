@@ -2475,17 +2475,11 @@
       ]
     },
     "jsx_text": {
-      "type": "CHOICE",
-      "members": [
-        {
-          "type": "PATTERN",
-          "value": "[^{}<>\\n& ]([^{}<>\\n&]*[^{}<>\\n& ])?"
-        },
-        {
-          "type": "PATTERN",
-          "value": "\\/\\/[^\\n]*"
-        }
-      ]
+      "type": "IMMEDIATE_TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "[^{}<>&]+"
+      }
     },
     "html_character_reference": {
       "type": "PATTERN",
@@ -6922,3 +6916,4 @@
     "pattern"
   ]
 }
+
