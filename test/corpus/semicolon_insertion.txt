@@ -21,6 +21,24 @@ if (a) {
       (return_statement (identifier)))))
 
 ============================================
+Semicolon insertion before parenthesized expressions
+============================================
+
+()=>{}
+(1)
+
+---
+
+(program
+  (expression_statement 
+    (arrow_function
+      parameters: (formal_parameters)
+      body: (statement_block)))
+  (expression_statement
+    (parenthesized_expression
+      (number))))
+
+============================================
 Semicolon insertion before update expressions
 ============================================
 
