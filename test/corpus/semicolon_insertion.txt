@@ -95,6 +95,10 @@ a
   !== b
 
 a
+  // comment
+  / b
+
+a
   !b; // standalone statement
 
 ---
@@ -104,6 +108,7 @@ a
   (expression_statement (binary_expression (identifier) (identifier)))
   (expression_statement (binary_expression (identifier) (identifier)))
   (expression_statement (binary_expression (identifier) (identifier)))
+  (expression_statement (binary_expression (identifier) (comment) (identifier)))
   (expression_statement (identifier))
   (expression_statement (unary_expression (identifier)))
   (comment))
@@ -282,6 +287,11 @@ class C {
 b
 /* interleaved non-semi-insertion */
   .c
+
+let a /*
+       * no insertion before semicolon
+       */
+;
 ---
 
 (program
@@ -306,4 +316,33 @@ b
     (formal_parameters)
     (statement_block))))
   (expression_statement
-    (member_expression (identifier) (comment) (property_identifier))))
+    (member_expression (identifier) (comment) (property_identifier)))
+    (lexical_declaration
+      (variable_declarator (identifier))
+      (comment)))
+
+================
+Regex literals 
+================
+
+let a
+/b/
+
+let a /b/
+
+---
+
+(program
+  (lexical_declaration
+    (variable_declarator
+      (identifier)))
+  (expression_statement
+    (regex
+      (regex_pattern)))
+  (lexical_declaration
+    (variable_declarator
+      (identifier))
+    (MISSING ";"))
+  (expression_statement
+    (regex
+      (regex_pattern))))

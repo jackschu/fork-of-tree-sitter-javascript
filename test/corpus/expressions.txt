@@ -355,8 +355,8 @@ Regexps
       (regex_pattern)))
   (expression_statement
     (regex
-      (regex_pattern))
-    (comment)))
+      (regex_pattern)))
+  (comment))
 
 ============================================
 Comments take precedence over regexes
