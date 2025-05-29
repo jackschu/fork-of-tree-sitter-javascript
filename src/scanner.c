@@ -123,7 +123,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer, bool comment_condition, boo
             }
 
             if (result == ACCEPT && comment_condition && lexer->lookahead != ',' && lexer->lookahead != '=') {
-                return true;
+                return lexer->lookahead != ';';
             }
         }
 
