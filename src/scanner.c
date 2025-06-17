@@ -26,9 +26,13 @@ unsigned tree_sitter_javascript_external_scanner_serialize(void *payload, char *
 
 void tree_sitter_javascript_external_scanner_deserialize(void *p, const char *b, unsigned n) {}
 
-static inline void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
+static inline void advance(TSLexer *lexer) {
+    lexer->advance(lexer, false);
+}
 
-static inline void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
+static inline void skip(TSLexer *lexer) {
+    lexer->advance(lexer, true);
+}
 
 static bool scan_template_chars(TSLexer *lexer) {
     lexer->result_symbol = TEMPLATE_CHARS;
@@ -54,19 +58,20 @@ static bool scan_template_chars(TSLexer *lexer) {
 }
 
 typedef enum {
-    REJECT,     // Semicolon is illegal, ie a syntax error occurred
-    NO_NEWLINE, // Unclear if semicolon will be legal, continue
-    ACCEPT,     // Semicolon is legal, assuming a comment was encountered
+    REJECT,     // We encountered non-wspace, non-comment after a '/' this is a regex or syntax error, concluded rejection
+    ACCEPT,     // We encountered non-wspace, non-comment after a '/' this is a regex or syntax error, concluded acceptance
+    NO_NEWLINE, // Unclear if ASI will be legal, consumed a single-line block comment, continue
+    NEWLINE,    // Scanned a newline, ASI is likely legal if the upcoming characters are judged to be illegal
 } WhitespaceResult;
 
-/**
- * @param consume If false, only consume enough to check if comment indicates semicolon-legality
- */
-static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scanned_comment, bool consume) {
-    bool saw_block_newline = false;
+static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scanned_comment, const bool *valid_symbols) {
+    bool saw_newline = false;
 
     for (;;) {
         while (iswspace(lexer->lookahead)) {
+            if (lexer->lookahead == '\n' || lexer->lookahead == 0x2028 || lexer->lookahead == 0x2029) {
+                saw_newline = true;
+            }
             skip(lexer);
         }
 
@@ -75,59 +80,62 @@ static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scann
 
             if (lexer->lookahead == '/') {
                 skip(lexer);
-                while (lexer->lookahead != 0 && lexer->lookahead != '\n' && lexer->lookahead != 0x2028 &&
+                while (!lexer->eof(lexer) && lexer->lookahead != '\n' && lexer->lookahead != 0x2028 &&
                        lexer->lookahead != 0x2029) {
                     skip(lexer);
                 }
+                saw_newline = true;
                 *scanned_comment = true;
             } else if (lexer->lookahead == '*') {
                 skip(lexer);
-                while (lexer->lookahead != 0) {
+                while (!lexer->eof(lexer)) {
                     if (lexer->lookahead == '*') {
                         skip(lexer);
                         if (lexer->lookahead == '/') {
                             skip(lexer);
                             *scanned_comment = true;
-
-                            if (lexer->lookahead != '/' && !consume) {
-                                return saw_block_newline ? ACCEPT : NO_NEWLINE;
-                            }
-
                             break;
                         }
                     } else if (lexer->lookahead == '\n' || lexer->lookahead == 0x2028 || lexer->lookahead == 0x2029) {
-                        saw_block_newline = true;
+                        saw_newline = true;
                         skip(lexer);
                     } else {
                         skip(lexer);
                     }
                 }
             } else {
+                // We've detected regex or division while scanning a comment
+                // If LOGICAL_OR is not allowed we assume we must be looking at regex and accept if we've passed a newline
+                if (!valid_symbols[LOGICAL_OR] && saw_newline) {
+                    return ACCEPT;
+                }
                 return REJECT;
             }
         } else {
-            return ACCEPT;
+            return saw_newline ? NEWLINE : NO_NEWLINE;
         }
     }
 }
 
-static bool scan_automatic_semicolon(TSLexer *lexer, bool comment_condition, bool *scanned_comment, const bool *valid_symbols) {
+static bool scan_automatic_semicolon(TSLexer *lexer, bool *scanned_comment, const bool *valid_symbols) {
     lexer->result_symbol = AUTOMATIC_SEMICOLON;
     lexer->mark_end(lexer);
 
     for (;;) {
-        if (lexer->lookahead == 0) {
+        if (lexer->eof(lexer)) {
             return true;
         }
 
         if (lexer->lookahead == '/') {
-            WhitespaceResult result = scan_whitespace_and_comments(lexer, scanned_comment, false);
+            WhitespaceResult result = scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols);
+            if (result == NEWLINE) {
+                break;
+            }
+            if (result == ACCEPT) {
+                return true;
+            } 
             if (result == REJECT) {
                 return false;
-            }
-
-            if (result == ACCEPT && comment_condition && lexer->lookahead != ',' && lexer->lookahead != '=') {
-                return true;
             }
         }
 
@@ -150,9 +158,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer, bool comment_condition, boo
         skip(lexer);
     }
 
-    skip(lexer);
-
-    if (scan_whitespace_and_comments(lexer, scanned_comment, true) == REJECT) {
+    if (scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols) == REJECT) {
         return false;
     }
 
@@ -372,7 +378,7 @@ bool tree_sitter_javascript_external_scanner_scan(void *payload, TSLexer *lexer,
 
     if (valid_symbols[AUTOMATIC_SEMICOLON]) {
         bool scanned_comment = false;
-        bool ret = scan_automatic_semicolon(lexer, !valid_symbols[LOGICAL_OR], &scanned_comment, valid_symbols);
+        bool ret = scan_automatic_semicolon(lexer, &scanned_comment, valid_symbols);
         if (!ret && !scanned_comment && valid_symbols[TERNARY_QMARK] && lexer->lookahead == '?') {
             return scan_ternary_qmark(lexer);
         }
