@@ -27,6 +27,7 @@ module.exports = grammar({
     $.escape_sequence,
     $.regex_pattern,
     $.jsx_text,
+    $._external_let,
   ],
 
   extras: $ => [
@@ -1226,13 +1227,13 @@ module.exports = grammar({
       ']',
     ),
 
-    _reserved_identifier: _ => choice(
+    _reserved_identifier: $ => choice(
       'get',
       'set',
       'async',
       'static',
       'export',
-      'let',
+      alias($._external_let, 'let'),
     ),
 
     _semicolon: $ => choice($._automatic_semicolon, ';'),

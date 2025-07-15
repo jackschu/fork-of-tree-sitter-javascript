@@ -6608,7 +6608,12 @@
           "value": "export"
         },
         {
-          "type": "STRING",
+          "type": "ALIAS",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_external_let"
+          },
+          "named": false,
           "value": "let"
         }
       ]
@@ -6942,6 +6947,10 @@
     {
       "type": "SYMBOL",
       "name": "jsx_text"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_external_let"
     }
   ],
   "inline": [

@@ -16,6 +16,7 @@ enum TokenType {
     ESCAPE_SEQUENCE,
     REGEX_PATTERN,
     JSX_TEXT,
+    LET_IDENTIFIER,
 };
 
 void *tree_sitter_javascript_external_scanner_create() { return NULL; }
@@ -64,7 +65,7 @@ typedef enum {
     NEWLINE,    // Scanned a newline, ASI is likely legal if the upcoming characters are judged to be illegal
 } WhitespaceResult;
 
-static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scanned_comment, const bool *valid_symbols) {
+static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scanned_comment, const bool *valid_symbols, bool repeatedly) {
     bool saw_newline = false;
 
     for (;;) {
@@ -72,47 +73,55 @@ static WhitespaceResult scan_whitespace_and_comments(TSLexer *lexer, bool *scann
             if (lexer->lookahead == '\n' || lexer->lookahead == 0x2028 || lexer->lookahead == 0x2029) {
                 saw_newline = true;
             }
-            skip(lexer);
+            advance(lexer);
         }
 
         if (lexer->lookahead == '/') {
-            skip(lexer);
+            advance(lexer);
 
             if (lexer->lookahead == '/') {
-                skip(lexer);
+                advance(lexer);
                 while (!lexer->eof(lexer) && lexer->lookahead != '\n' && lexer->lookahead != 0x2028 &&
                        lexer->lookahead != 0x2029) {
-                    skip(lexer);
+                    advance(lexer);
                 }
                 saw_newline = true;
                 *scanned_comment = true;
             } else if (lexer->lookahead == '*') {
-                skip(lexer);
+                advance(lexer);
                 while (!lexer->eof(lexer)) {
                     if (lexer->lookahead == '*') {
-                        skip(lexer);
+                        advance(lexer);
                         if (lexer->lookahead == '/') {
-                            skip(lexer);
+                            advance(lexer);
                             *scanned_comment = true;
                             break;
                         }
                     } else if (lexer->lookahead == '\n' || lexer->lookahead == 0x2028 || lexer->lookahead == 0x2029) {
                         saw_newline = true;
-                        skip(lexer);
+                        advance(lexer);
                     } else {
-                        skip(lexer);
+                        advance(lexer);
                     }
                 }
             } else {
                 // We've detected regex or division while scanning a comment
                 // If LOGICAL_OR is not allowed we assume we must be looking at regex and accept if we've passed a newline
+                if (repeatedly) {
+                    return REJECT;
+                }
                 if (!valid_symbols[LOGICAL_OR] && saw_newline) {
                     return ACCEPT;
                 }
                 return REJECT;
             }
         } else {
-            return saw_newline ? NEWLINE : NO_NEWLINE;
+            if (!repeatedly) {
+                return saw_newline ? NEWLINE : NO_NEWLINE;
+            }
+            if (!iswspace(lexer->lookahead) || lexer->lookahead != '/') {
+                return ACCEPT;
+            }
         }
     }
 }
@@ -127,7 +136,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer, bool *scanned_comment, cons
         }
 
         if (lexer->lookahead == '/') {
-            WhitespaceResult result = scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols);
+            WhitespaceResult result = scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols, false);
             if (result == NEWLINE) {
                 break;
             }
@@ -158,7 +167,7 @@ static bool scan_automatic_semicolon(TSLexer *lexer, bool *scanned_comment, cons
         skip(lexer);
     }
 
-    if (scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols) == REJECT) {
+    if (scan_whitespace_and_comments(lexer, scanned_comment, valid_symbols, false) == REJECT) {
         return false;
     }
 
@@ -364,6 +373,189 @@ static bool scan_shorthand_arrow(TSLexer *lexer) {
     return false;
 }
 
+
+// poor man's assumption: these are the characters that are not ID_Start or ID_Continue
+static bool is_non_id_start_continue(wint_t wc) {
+    switch (wc) {
+        case L'#':
+        case L'%':
+        case L'&':
+        case L'\'':
+        case L'(':
+        case L')':
+        case L'*':
+        case L'+':
+        case L',':
+        case L'-':
+        case L'.':
+        case L'/':
+        case L':':
+        case L';':
+        case L'<':
+        case L'=':
+        case L'>':
+        case L'?':
+        case L'@':
+        case L'[':
+        case L'\\':
+        case L']':
+        case L'^':
+        case L'`':
+        case L'{':
+        case L'|':
+        case L'}':
+        case L'~':
+            return true;
+        default:
+            return !iswalnum(wc);
+    }
+}
+
+// from musl
+static size_t wcslen(const wchar_t *s)
+{
+	const wchar_t *a;
+	for (a=s; *s; s++);
+	return s-a;
+}
+static int wcsncmp(const wchar_t *l, const wchar_t *r, size_t n)
+{
+	for (; n && *l==*r && *l && *r; n--, l++, r++);
+	return n ? (*l < *r ? -1 : *l > *r) : 0;
+}
+static bool is_widestring_match(const wchar_t *str, const wchar_t *other) {
+    // Get the lengths of both widestrings
+    size_t str_len = wcslen(str);
+    size_t other_len = wcslen(other);
+
+    if (other_len != str_len) {
+        return false;
+    }
+
+
+    if (wcsncmp(str, other, str_len) == 0) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+const wchar_t *const RESERVED_WORDS[] = {
+    L"await",
+    L"break",
+    L"case",
+    L"catch",
+    L"class",
+    L"const",
+    L"continue",
+    L"debugger",
+    L"default",
+    L"delete",
+    L"do",
+    L"else",
+    L"enum",
+    L"export",
+    L"extends",
+    L"false",
+    L"finally",
+    L"for",
+    L"function",
+    L"if",
+    L"import",
+    L"in",
+    L"instanceof",
+    L"new",
+    L"null",
+    L"return",
+    L"super",
+    L"switch",
+    L"this",
+    L"throw",
+    L"true",
+    L"try",
+    L"typeof",
+    L"var",
+    L"void",
+    L"while",
+    L"with",
+    L"yield",
+};
+
+
+static bool scan_let(TSLexer *lexer, const bool *valid_symbols) {
+    if (lexer->lookahead != 'l') {
+        return false;
+    }
+    advance(lexer);
+    if (lexer->lookahead != 'e') {
+        return false;
+    }
+    advance(lexer);
+    if (lexer->lookahead != 't') {
+        return false;
+    }
+    advance(lexer);
+
+    lexer->mark_end(lexer);
+
+    bool _unused;
+    if (scan_whitespace_and_comments(lexer, &_unused, valid_symbols, true) == REJECT) {
+        lexer->result_symbol = LET_IDENTIFIER;
+        return true;
+    }
+
+    while (!lexer->eof(lexer) && iswspace(lexer->lookahead)) {
+        advance(lexer);
+    }
+
+    if (lexer->lookahead == '[' || lexer->lookahead == '{') {
+        return false;
+    }
+    wchar_t current_word_buffer[11]; // Max 10 chars + null terminator
+    size_t current_word_len = 0;
+
+    // poor mans assumption: digits are the sole characters in ID_Continue but not ID_Start
+    if (iswdigit(lexer->lookahead)) {
+        lexer->result_symbol = LET_IDENTIFIER;
+        return true;
+    }
+    wint_t c;
+    while (current_word_len < 10) {
+        c = lexer->lookahead;
+        if(lexer->eof(lexer)) {
+            break;
+        }
+        
+        if (is_non_id_start_continue(c) && c != L'_' && c != L'$') {
+            break;
+        }
+
+        advance(lexer);
+
+        if (iswspace(c)) {
+            break;
+        }
+        current_word_buffer[current_word_len++] = c;
+    }
+
+    if (current_word_len == 0) {
+        lexer->result_symbol = LET_IDENTIFIER;
+        return true;
+    }
+    current_word_buffer[current_word_len] = L'\0';
+                
+    int n = sizeof(RESERVED_WORDS) / sizeof(RESERVED_WORDS[0]);
+    for (int i = 0; i < n; i++)  {
+        if (is_widestring_match(current_word_buffer, RESERVED_WORDS[i])) {
+            lexer->result_symbol = LET_IDENTIFIER;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 bool tree_sitter_javascript_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
     if (valid_symbols[TEMPLATE_CHARS]) {
         if (valid_symbols[AUTOMATIC_SEMICOLON]) {
@@ -385,7 +577,20 @@ bool tree_sitter_javascript_external_scanner_scan(void *payload, TSLexer *lexer,
         if (!ret && valid_symbols[SHORTHAND_ARROW] && lexer->lookahead == '=') {
             return scan_shorthand_arrow(lexer);
         }
+        if (!ret && valid_symbols[LET_IDENTIFIER] && lexer->lookahead == 'l') {
+            return scan_let(lexer, valid_symbols);
+        }
+
         return ret;
+    }
+
+    if (valid_symbols[LET_IDENTIFIER]) {
+        while(!lexer->eof(lexer) && iswspace(lexer->lookahead)) {
+            skip(lexer);
+        }
+        if (lexer->lookahead == 'l') {
+            return scan_let(lexer, valid_symbols);
+        }
     }
 
     if (valid_symbols[TERNARY_QMARK]) {
